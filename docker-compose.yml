@@ -1,0 +1,10 @@
+version: '3'
+services:
+  qiling:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./logs:/home/logs/
+    working_dir: /home
+    command: ./qiling/run_qiliot.sh

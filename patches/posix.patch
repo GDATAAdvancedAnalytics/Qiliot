@@ -1,0 +1,25 @@
+--- patches/posix_org.py	2024-03-20 12:35:23.025230841 +0100
++++ patches/posix_fixed.py	2024-03-20 12:44:23.855653784 +0100
+@@ -400,8 +400,21 @@
+                 # cut the first part of the arg if it is of form fstatat64_fd
+                 if name.startswith(f'{syscall_basename}_'):
+                     name = name.partition('_')[-1]
++                if name == "filename":
++                    filename = self.ql.os.utils.read_cstring(value)
++                    args.append((name, f'{filename}'))
++                if name == "buf":
++                    data = self.ql.os.utils.read_cstring(value, 10)
++                    escaped_data  = data.replace("\n", "\\n")
++                    if escaped_data.startswith("Look"):
++                        args.append((name, f'{escaped_data}'))
++                    else: 
++                        data = self.ql.mem.read(value, 10)
++                        args.append((name, f"{data} ... [more data]"))
++                elif name != "buf" or name != "filename" or name != "request":
++                    args.append((name, f'{value:#x}'))
++ 
+ 
+-                args.append((name, f'{value:#x}'))
+ 
+             sret = QlOsPosix.getNameFromErrorCode(retval)
+             self.utils.print_function(self.ql.arch.regs.arch_pc, syscall_basename, args, sret, False)

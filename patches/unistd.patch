@@ -1,0 +1,31 @@
+--- org_unistd.py	2023-12-29 21:10:46
++++ unistd.py	2023-12-31 02:32:20
+@@ -267,7 +267,7 @@
+ 
+     else:
+         try:
+-            regreturn = f.seek(offset, origin)
++            regreturn = f.lseek(offset, origin)
+         except OSError:
+             regreturn = -1
+ 
+@@ -404,7 +404,10 @@
+     except:
+         regreturn = -1
+     else:
+-        ql.log.debug(f'write() CONTENT: {bytes(data)}')
++        if count < 50:
++            ql.log.debug(f'write() CONTENT: {bytes(data)}')
++        else:
++            ql.log.debug(f'write() CONTENT_LEN: {count}')
+ 
+         if hasattr(f, 'write'):
+             f.write(data)
+@@ -888,6 +891,7 @@
+             d_name = (result.name if isinstance(result, os.DirEntry) else result._str).encode() + b'\x00'
+             d_type = _type_mapping(result)
+             d_reclen = n + n + 2 + len(d_name) + 1
++            d_reclen = (d_reclen + n) & ~(n - 1) # alignment
+ 
+             # TODO: Dirty fix for X8664 MACOS 11.6 APFS
+             # For some reason MACOS return int value is 64bit
