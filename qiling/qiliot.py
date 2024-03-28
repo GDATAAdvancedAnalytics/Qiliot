@@ -8,11 +8,12 @@ from qiling.const import QL_VERBOSE
 # Define absolute path
 ABSOLUTE_PATH = sys_os.path.dirname(sys_os.path.abspath(__file__))
 
+
 class Qiliot:
     '''
     Initialize Qiliot emulate Wrapper for AcidRain emulation with Qiliot.
     '''
-    def __init__(self, binary_path:str, rootfs_path:str, log_level:str, timestamp:str):
+    def __init__(self, binary_path: str, rootfs_path: str, log_level: str, timestamp: str):
         self.binary_path = binary_path
         self.binary_name = self.extract_binary_name_from_path(binary_path)
         self.rootfs_path = rootfs_path
@@ -22,7 +23,6 @@ class Qiliot:
         self.instruction_addresses = []
         self.mtd_type = 0
         self.root = 0
-
 
     #####################################################################
     #####################    HELPING METHODS   ##########################
@@ -48,21 +48,19 @@ class Qiliot:
             case _:
                 return QL_VERBOSE.DEFAULT
 
-
-    def extract_binary_name_from_path(self, binary_path:str) -> str:
+    def extract_binary_name_from_path(self, binary_path: str) -> str:
         '''
         Extract binary name from binary path.
         '''
         bin_name_index = binary_path.rfind("/")
-        binary_name =  binary_path[bin_name_index+1:] if bin_name_index != -1 else binary_path
+        binary_name = binary_path[bin_name_index+1:] if bin_name_index != -1 else binary_path
         return binary_name
-
 
     #####################################################################
     ####################  INITIALIZE EMULATION  #########################
     #####################################################################
 
-    def run_qiliot(self, path: list, rootfs:str):
+    def run_qiliot(self, path: list, rootfs: str):
         '''
         Prepare everything which is relevant for emulating AcidRain with Qiling.
         Args:
@@ -72,7 +70,7 @@ class Qiliot:
         # Log file name for current emulation
         logfile_name = f"{sys_os.path.dirname(ABSOLUTE_PATH)}/logs/{self.timestamp}.log"
         # Init Qiling
-        ql = Qiling(path,rootfs=rootfs,log_file=logfile_name)
+        ql = Qiling(path, rootfs=rootfs, log_file=logfile_name)
         # Set log level
         ql.verbose = self.get_logging_level()
 
@@ -83,6 +81,7 @@ class Qiliot:
         ql.add_fs_mapper("/dev/mtd0", f"{image_path}/mtd0")
 
         ql.run()
+
 
 def parse_args() -> object:
     '''
@@ -97,10 +96,11 @@ def parse_args() -> object:
 
     return parser.parse_args()
 
+
 if __name__ == "__main__":
     args = parse_args()
     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M")
 
-    #Init Qiliot
+    # Init Qiliot
     qiliot = Qiliot(args.binary, args.rootfs, args.loglevel, timestamp)
     qiliot.run_qiliot([qiliot.binary_path], qiliot.rootfs_path)
