@@ -3,7 +3,7 @@ FROM python:3.10
 RUN apt-get update && apt-get install -y cmake patch \
 	&& pip install qiling==1.4.6 pefile==2023.2.7
 
-RUN mkdir /home/qiling/ && mkdir /home/logs/
+RUN mkdir /home/qiling/ && mkdir /home/logs/ && mkdir /home/coverage/ && mkdir /home/results/ 
 
 COPY qiling/ /home/qiling/ 
 COPY rootfs /home/rootfs

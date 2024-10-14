@@ -1,5 +1,7 @@
 #!/usr/local/bin/python
 from enum import Enum
+import fcntl
+import json
 import os as sys_os
 import argparse
 from datetime import datetime
@@ -7,6 +9,8 @@ from qiling import Qiling
 from qiling.const import *
 from qiling.const import QL_VERBOSE
 from functools import partial
+from qiliot_cov import QiliotCov
+import qiling.os.linux.map_syscall as lin
 
 # Define absolute path
 ABSOLUTE_PATH = sys_os.path.dirname(sys_os.path.abspath(__file__))
@@ -57,15 +61,58 @@ class Qiliot:
         self.mtd_type = 0
         self.root = 0
 
+    def log_syscall_with_id(self, ql: Qiling, address, size, *args, **kwargs) -> None:
+        '''
+        Hook on code level for tracking virtuall addresses of instructions and syscalls.
+        
+        Args:
+            ql (Qiling): The Qiling emulator instance
+            address: Current address
+            size: Size of current instruction
+            *args, **kwards: Additional and keyword argumentd 
+        '''
+
+        # Get the mips syscall table for translating ids into syscall function names
+        mapper = lin.mips_syscall_table
+
+        # Append every instruction address
+        ins_address = hex(address)
+        if ins_address not in self.instruction_addresses:
+            self.instruction_addresses.append(ins_address)
+
+
+        if ql.mem.read(address, size) == b'\x00\x00\x00\x0c':
+            # In case of system call
+
+            syscall_id = ql.arch.regs.read("v0") # stored syscall id
+            syscall_name = mapper.get(syscall_id)
+            # Create syscall element and append it for results file
+            syscall_info = {
+                "syscall_num": syscall_id,
+                "syscall_name": syscall_name
+            }
+            if syscall_info not in self.syscalls:
+                self.syscalls.append(syscall_info)
+
+
     def hook_fork(self, ql:Qiling, *args, **kwargs):
         '''
         Hook fork to set ql.os.child_processes to False for every child to prevent qiling to do os.exit()
+        and to clear collected informations like coverage, instructions adresses and syscalls.
         
         Args:
             ql (Qiling): The Qiling emulator instance
             *args, **kwards: Additional and keyword argumentd
         '''
-        # Prevent qiling doing os.exit()        
+
+        # In case of childprocesses
+        if ql.os.child_processes:
+            # Clear collected informations in child cause parent will keep it
+            self.cov.clear()
+            self.instruction_addresses.clear()
+            self.syscalls.clear()
+            # Prevent qiliots child processes from running run_qiliot()
+        # Prevent qiling doing os.exit()
         ql.os.child_processes = False
 
     
@@ -138,7 +185,7 @@ class Qiliot:
         
         (Note: Qiling will emulate the executed binary, this means informations will be appear in logs and results.)
         '''
-        ql.log.info(f"Simultates execve: {ql.os.utils.read_cstring(filename)}")
+        ql.log.info(f"Simulates execve: {ql.os.utils.read_cstring(filename)}")
         return 0x0
 
     #####################################################################
@@ -173,6 +220,68 @@ class Qiliot:
         binary_name = binary_path[bin_name_index+1:] if bin_name_index != -1 else binary_path
         return binary_name
 
+    def generate_result_file(self):
+        '''
+        Generate resultfile for current emulation. Each process will write its result into the file.
+        '''
+        # Unique path for each emulation
+        result_path = f"{sys_os.path.dirname(ABSOLUTE_PATH)}/results/{self.timestamp}_{self.binary_name}/"
+        self.result_path = result_path
+        result_file_path = f"{result_path}results_{self.mtd_type}_{self.root}.json"
+
+
+        with open(result_file_path, 'r+') as file:
+            fcntl.flock(file.fileno(), fcntl.LOCK_EX)
+            try:
+                # Load content of the result file
+                existing_data = json.load(file)
+            except json.JSONDecodeError:
+                # If content is empty, set basic structure
+                existing_data = {"syscalls": [], "instruction_addresses": [], "blocks": []}
+
+            # Expand instruction address only in case, if its not already in the result file
+            for address in self.instruction_addresses:
+                if address not in existing_data["instruction_addresses"]:
+                    existing_data["instruction_addresses"].append(address)
+            # Expand syscall only when it does not exist in result file
+            for syscall in self.syscalls:
+                if syscall not in existing_data["syscalls"]:
+                    existing_data["syscalls"].append(syscall)
+
+            # Write content back to result file and unlock
+            file.seek(0)
+            json.dump(existing_data, file, indent=4)
+            file.truncate()
+            fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+
+    def write_result_file_for_each_process(self):
+        '''
+        Creates result file for each process.
+        '''
+        # Get current process id and current timestamp
+        pid = sys_os.getpid()
+        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        result_file = f"result_{pid}_{timestamp}.json"
+
+        with open(self.result_path + result_file, 'a+') as file:
+            fcntl.flock(file.fileno(), fcntl.LOCK_EX)
+
+            try:
+                # Load content of result file
+                existing_data = json.load(file)
+            except json.JSONDecodeError:
+                # If content is empty, set basic structure
+                existing_data = {"blocks":[],"syscalls":[], "instruction_addresses": []}
+
+            # Expand data
+            existing_data["syscalls"].extend(self.syscalls)
+            existing_data["instruction_addresses"].extend(self.instruction_addresses)
+            #existing_data.get("blocks").extend(addressbook_blocks.values())
+
+            # Write result into file
+            json.dump(existing_data, file, indent=4)
+            fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+            
     #####################################################################
     ####################  INITIALIZE EMULATION  #########################
     #####################################################################
@@ -210,6 +319,15 @@ class Qiliot:
             case 3:
                 self.root = False
                 self.mtd_type = 0
+
+        # Create directory for resutls of current emulation
+        result_path = f"{sys_os.path.dirname(ABSOLUTE_PATH)}/results/{self.timestamp}_{self.binary_name}/"
+        sys_os.makedirs(result_path, exist_ok=True)
+        
+        # create result file for whole emulation
+        result_path = f"{result_path}results_{self.mtd_type}_{self.root}.json"
+        open(result_path, 'w').close()
+
                 
         # Log file name for current emulation
         logfile_name = f"{sys_os.path.dirname(ABSOLUTE_PATH)}/logs/{self.timestamp}.log"
@@ -217,7 +335,16 @@ class Qiliot:
         ql = Qiling(path, rootfs=rootfs, log_file=logfile_name)
         # Set log level
         ql.verbose = self.get_logging_level()
+        
 
+        # Set up everything relevant for root
+        if self.root:
+            ql.os.uid = 0
+            ql.os.gid = 0
+            ql.os.euid = 0
+            ql.os.egid = 0
+            ql.os.root = True
+                
         # Dynamically add files to the filesystem
         image_path = f"{sys_os.path.dirname(ABSOLUTE_PATH)}"
         ql.add_fs_mapper("/dev/null", "/dev/null")
@@ -225,15 +352,33 @@ class Qiliot:
         ql.add_fs_mapper("/dev/mtd0", f"{image_path}/mtd0")
 
         # Add hooks
+        ql.hook_code(self.log_syscall_with_id)
         custom_hook = partial(self.hook_ioctl, mtd_type=self.mtd_type)
         custom_hook.__name__ = "hook_ioctl"
         ql.os.set_syscall('ioctl', custom_hook, QL_INTERCEPT.CALL)
         ql.os.set_syscall("fork", self.hook_fork, QL_INTERCEPT.EXIT)
         ql.os.set_syscall('execve', self.hook_execve, QL_INTERCEPT.CALL)
         ql.os.set_syscall('reboot', self.hook_reboot, QL_INTERCEPT.CALL)
+        
 
+
+        # Set up ervything for Coverage
+        coverage_file = f"{sys_os.path.dirname(ABSOLUTE_PATH)}/coverage/{self.root}_{self.mtd_type}.cov"
+        qiliot_cov = QiliotCov(ql, coverage_file)
+        self.cov = qiliot_cov
+
+        # Activate hook on blocks for coverage tracking
+        qiliot_cov.activate()
         ql.run()
-
+        # Deactivate hook on blocks for coverage
+        qiliot_cov.deactivate()
+        # Write and update blocks in coverage file
+        qiliot_cov.write_blocks()
+        # Generate complete result file after emulation
+        self.generate_result_file()
+        
+        # Generate result file after each process
+        self.write_result_file_for_each_process()
 
 def parse_args() -> object:
     '''
